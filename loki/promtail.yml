@@ -1,0 +1,46 @@
+server:            
+  http_listen_port: 9080
+  grpc_listen_port: 0        
+                     
+positions:                                         
+  filename: /home/vagrant/loki/positions.yml
+
+client:                      
+  url: http://192.168.122.14:3100/loki/api/v1/push
+
+      # log_line_prefix = '%m [%r] [%p]: [l-%l] user=%u,db=%d,app=%a,e=%e '
+      #
+      #  2020-04-22 23:59:38.995 UTC [127.0.0.1(56704)] [8667]: [l-3022] user=ccp_monitoring,db=testdb2,app=pgmonitor_global,e=00000 LOG:  AUDIT: SESSION,3020,1,READ,SELECT,,,"SELECT current_database() as dbname, schemaname, relname, seq_scan, seq_tup_read, idx_scan, idx_tup_fetch, n_tup_ins, n_tup_upd, n_tup_del, n_tup_hot_upd, n_live_tup, n_dead_tup, vacuum_count, autovacuum_count, analyze_count, autoanalyze_count FROM pg_catalog.pg_stat_user_tables",<not logged>
+      #
+scrape_configs:
+  - job_name: pg-log
+    static_configs:
+    - targets:
+       - localhost
+      labels:
+        job: pg-logs
+        host: c5y-pg-122-16
+        __path__: /var/lib/pgsql/11/data/log/*.log
+    pipeline_stages:
+    - regex:
+        expression: ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+) \[(?P<sourceip>\S+)\] \[(?P<pid>\d+)\](:) \[l-(?P<logline>\d+)\] user=(?P<user>\w+),db=(?P<db>\w+),app=(?P<app>\w+),e=(?P<errno>\w+)
+    - labels:
+        sourceip:
+        pid:
+        logline:
+        user:
+        db:
+        app:
+        errno:
+    - timestamp:
+        source: time
+        format: 2006-01-02 15:04:05.999 MST
+#  - job_name: systemd_journal
+#    journal:
+#      max_age: 12h
+#      labels:
+#        job: systemd-journal
+#    relabel_configs:
+#      - source_labels: ['__journal__systemd_unit']
+#        target_label: 'unit'
+
