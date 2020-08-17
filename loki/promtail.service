@@ -1,0 +1,16 @@
+# -*- mode: conf -*-
+
+[Unit]
+Description=Agent responsible for gathering logs and sending them to Loki
+Documentation=https://github.com/grafana/loki
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/sysconfig/promtail
+User=postgres
+ExecStart=/usr/bin/promtail $OPTS
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+

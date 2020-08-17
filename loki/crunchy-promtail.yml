@@ -3,7 +3,7 @@ server:
   grpc_listen_port: 0        
                      
 positions:                                         
-  filename: /home/vagrant/loki/positions.yml
+  filename: /var/db/promtail/positions.yml
 
 client:                      
   url: http://192.168.122.14:3100/loki/api/v1/push
@@ -19,7 +19,7 @@ scrape_configs:
        - localhost
       labels:
         job: pg-logs
-        host: c5y-pg-122-16
+        host: 192.168.122.16 
         __path__: /var/lib/pgsql/11/data/log/*.log
     pipeline_stages:
     - regex:

@@ -1,0 +1,1 @@
+OPTS="-config.file=/etc/promtail/crunchy-promtail.yml"

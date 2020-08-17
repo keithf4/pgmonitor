@@ -1,0 +1,16 @@
+# -*- mode: conf -*-
+
+[Unit]
+Description=Main server responsible for storing logs and processing queries
+Documentation=https://github.com/grafana/loki
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/sysconfig/loki
+User=prometheus
+ExecStart=/usr/bin/loki $OPTS
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
