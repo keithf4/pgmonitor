@@ -23,11 +23,11 @@ scrape_configs:
         __path__: /var/lib/pgsql/11/data/log/*.log
     pipeline_stages:
     - regex:
-        expression: ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+) \[(?P<sourceip>\S+)\] \[(?P<pid>\d+)\](:) \[l-(?P<logline>\d+)\] user=(?P<user>\w+),db=(?P<db>\w+),app=(?P<app>\w+),e=(?P<errno>\w+)
+# This does not parse properly when certain fields are empty (sourceip, pid, etc) 
+        expression: ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+) \[(?P<sourceip>\S+)\] \[(?P<pid>\d+)\](:) \[l-\d+\] user=(?P<user>\w+),db=(?P<db>\w+),app=(?P<app>\w+),e=(?P<errno>\w+)
     - labels:
         sourceip:
         pid:
-        logline:
         user:
         db:
         app:
