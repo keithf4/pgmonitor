@@ -57,24 +57,24 @@ groups:
       description: '(EXPERIMENTAL) Disk {{ $labels.device }} on target {{ $labels.job }} is predicted to fill in 4 hrs based on current usage'
 
   - alert: SystemLoad5m
-    expr: node_load5 > 5
+    expr: node_load5 > (count(count(node_cpu_seconds_total{cpu=~".*"}) by (cpu))) + 5
     for: 10m
     labels:
       service: system
       severity: warning
       severity_num: 200
     annotations:
-      description: 'System load for target {{ $labels.job }} is high ({{ $value }})'
+      description: '5 minute system load for target {{ $labels.job }} is slightly higher than CPU count: (Load: {{ $value }}, CPU count: count(count(node_cpu_seconds_total{cpu=~".*"}) by (cpu)))'
 
   - alert: SystemLoad5m
-    expr: node_load5 > 10
+    expr: node_load5 > (count(count(node_cpu_seconds_total{cpu=~".*"}) by (cpu))) + 10
     for: 10m
     labels:
       service: system
       severity: critical
       severity_num: 300
     annotations:
-      description: 'System load for target {{ $labels.job }} is high ({{ $value }})'
+      description: '5 minute system load for target {{ $labels.job }} is notably higher than CPU count: (Load: {{ $value }}, CPU count: count(count(node_cpu_seconds_total{cpu=~".*"}) by (cpu)))'
 
   - alert: MemoryAvailable
     expr: (100 * (node_memory_Available_bytes) / node_memory_MemTotal_bytes) < 25
