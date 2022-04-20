@@ -1,0 +1,1208 @@
+# Notes:
+#
+# - Auto-discovery works. With --include-database option, can dynamically add user tables to other databases to scrape
+# - Adding custom tags (like "perdb") means those queries will not automatically be included to scrape (even if cluster/replica are also tags). Must use --tag flag to enable them. Having no tags means that metric will always be included
+# - Removed pg_stat_statements limits macro and time macro for reset function argument
+# - pgBackRest macro removed and shouldn't be needed anymore
+# - name: field only needs to be set so far when query needs to be adjusted per version of PG but the metric name needs to stay the same. The collection name is what must remain unique
+#
+# Template:
+#:
+#  desc: 
+#  query: | 
+#     
+#  tags:
+#    - cluster
+#  ttl: 60
+#  metrics:
+
+###
+#
+# Copyright © 2017-2022 Crunchy Data Solutions, Inc. All Rights Reserved.
+#
+###
+
+#######################################
+#
+# Begin : Global Queries
+#
+###
+
+ccp_postgresql_version:
+  desc: "PostgreSQL version"
+  query: | 
+    SELECT current_setting('server_version_num')::int AS current;
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  fatal: true
+  metrics:
+    - current: 
+        usage: "GAUGE"
+        description: "The current version of PostgreSQL that this exporter is running on as a 6 digit integer (######)."
+
+ccp_is_in_recovery:
+  desc: "Recovery status"
+  query: | 
+   SELECT CASE WHEN pg_is_in_recovery = true THEN 1 ELSE 2 END AS status from pg_is_in_recovery(); 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - status:
+        usage: "GAUGE"
+        description: "Return value of 1 means database is in recovery. Otherwise 2 it is a primary."
+
+ccp_database_size:
+  desc: "Database size in bytes"
+  query: | 
+   SELECT datname as dbname, pg_database_size(datname) as bytes FROM pg_catalog.pg_database WHERE datistemplate = false 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - dbname:
+        usage: "LABEL"
+        description: "Database name"
+    - bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"
+
+ccp_locks:
+  desc: "Database locks" 
+  query: | 
+    SELECT pg_database.datname as dbname, tmp.mode, COALESCE(count,0) as count
+    FROM
+      (
+        VALUES ('accesssharelock'),
+        ('rowsharelock'),
+        ('rowexclusivelock'),
+        ('shareupdateexclusivelock'),
+        ('sharelock'),
+        ('sharerowexclusivelock'),
+        ('exclusivelock'),
+        ('accessexclusivelock')
+      ) AS tmp(mode) CROSS JOIN pg_catalog.pg_database
+    LEFT JOIN
+    (SELECT database, lower(mode) AS mode,count(*) AS count
+      FROM pg_catalog.pg_locks WHERE database IS NOT NULL
+      GROUP BY database, lower(mode)
+    ) AS tmp2
+    ON tmp.mode=tmp2.mode and pg_database.oid = tmp2.database;
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - dbname:
+        usage: "LABEL"
+        description: "Database name"
+    - mode:
+        usage: "LABEL"
+        description: "Lock type"
+    - count:
+        usage: "GAUGE"
+        description: "Number of locks"
+
+
+ccp_stat_bgwriter:
+  desc: "Background Writer Metrics" 
+  query: | 
+    SELECT checkpoints_timed, checkpoints_req, checkpoint_write_time, checkpoint_sync_time, buffers_checkpoint, buffers_clean
+    , maxwritten_clean, buffers_backend, buffers_backend_fsync, buffers_alloc, stats_reset 
+    FROM pg_catalog.pg_stat_bgwriter;
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - checkpoints_timed:
+          usage: "GAUGE"
+          description: "Number of scheduled checkpoints that have been performed"
+    - checkpoints_req:
+          usage: "GAUGE"
+          description: "Number of requested checkpoints that have been performed"
+    - checkpoint_write_time:
+          usage: "GAUGE"
+          description: "Total amount of time that has been spent in the portion of checkpoint processing where files are written to disk, in milliseconds"
+    - checkpoint_sync_time:
+          usage: "GAUGE"
+          description: "Total amount of time that has been spent in the portion of checkpoint processing where files are synchronized to disk, in milliseconds"
+    - buffers_checkpoint:
+          usage: "GAUGE"
+          description: "Number of buffers written during checkpoints"
+    - buffers_clean:
+          usage: "GAUGE"
+          description: "Number of buffers written by the background writer"
+    - maxwritten_clean:
+          usage: "GAUGE"
+          description: "Number of times the background writer stopped a cleaning scan because it had written too many buffers"
+    - buffers_backend:
+          usage: "GAUGE"
+          description: "Number of buffers written directly by a backend"
+    - buffers_backend_fsync:
+          usage: "GAUGE"
+          description: "Number of times a backend had to execute its own fsync call (normally the background writer handles those even when the backend does its own write)"
+    - buffers_alloc:
+          usage: "GAUGE"
+          description: "Number of buffers allocated"
+    - stats_reset:
+          usage: "GAUGE"
+          description: "Time at which these statistics were last reset"
+
+
+ccp_stat_database:
+  desc: "Database level statistics"
+  query: | 
+    SELECT s.datname as dbname, xact_commit, xact_rollback, blks_read, blks_hit, tup_returned, tup_fetched
+    , tup_inserted, tup_updated, tup_deleted, conflicts, temp_files, temp_bytes, deadlocks 
+    FROM pg_catalog.pg_stat_database s 
+    JOIN pg_catalog.pg_database d on d.datname = s.datname 
+    WHERE d.datistemplate = false;
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - dbname:
+        usage: "LABEL"
+        description: "Name of database"
+    - xact_commit: 
+        usage: "GAUGE"
+        description: "Number of transactions in this database that have been committed"
+    - xact_rollback: 
+        usage: "GAUGE"
+        description: "Number of transactions in this database that have been rolled back"
+    - blks_read:
+        usage: "GAUGE"
+        description: "Number of disk blocks read in this database"
+    - blks_hit:
+        usage: "GAUGE"
+        description: "Number of times disk blocks were found already in the buffer cache, so that a read was not necessary"
+    - tup_returned:
+        usage: "GAUGE"
+        description: "Number of rows returned by queries in this database"
+    - tup_fetched:
+        usage: "GAUGE"
+        description: "Number of rows fetched by queries in this database"
+    - tup_inserted:
+        usage: "GAUGE"
+        description: "Number of rows inserted by queries in this database"
+    - tup_updated:
+        usage: "GAUGE"
+        description: "Number of rows updated by queries in this database"
+    - tup_deleted:
+        usage: "GAUGE"
+        description: "Number of rows deleted by queries in this database"
+    - conflicts:
+        usage: "GAUGE"
+        description: "Number of queries canceled due to conflicts with recovery in this database"
+    - temp_files:
+        usage: "GAUGE"
+        description: "Number of rows deleted by queries in this database"
+    - temp_bytes:
+        usage: "GAUGE"
+        description: "Total amount of data written to temporary files by queries in this database"
+    - deadlocks:
+        usage: "GAUGE"
+        description: "Number of deadlocks detected in this database"
+
+
+ccp_transaction_wraparound:
+  desc: "Transaction ID Exhaustion/Wraparound metrics"
+  query: | 
+   WITH max_age AS ( SELECT 2000000000 as max_old_xid, setting AS autovacuum_freeze_max_age FROM pg_catalog.pg_settings WHERE name = 'autovacuum_freeze_max_age'), per_database_stats AS ( SELECT datname , m.max_old_xid::int , m.autovacuum_freeze_max_age::int , age(d.datfrozenxid) AS oldest_current_xid FROM pg_catalog.pg_database d JOIN max_age m ON (true) WHERE d.datallowconn) SELECT max(oldest_current_xid) AS oldest_current_xid , max(ROUND(100*(oldest_current_xid/max_old_xid::float))) AS percent_towards_wraparound , max(ROUND(100*(oldest_current_xid/autovacuum_freeze_max_age::float))) AS percent_towards_emergency_autovac FROM per_database_stats; 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - oldest_current_xid:
+        usage: "GAUGE"
+        description: "Oldest current transaction ID in cluster"
+    - percent_towards_wraparound:
+        usage: "GAUGE"
+        description: "Percentage towards transaction ID wraparound"
+    - percent_towards_emergency_autovac:
+        usage: "GAUGE"
+        description: "Percentage towards emergency autovacuum process starting"
+
+
+ccp_archive_command_status:
+  desc: "Archive command status"
+  query: | 
+    SELECT CASE 
+        WHEN EXTRACT(epoch from (last_failed_time - last_archived_time)) IS NULL THEN 0
+        WHEN EXTRACT(epoch from (last_failed_time - last_archived_time)) < 0 THEN 0
+        ELSE EXTRACT(epoch from (last_failed_time - last_archived_time)) 
+        END AS seconds_since_last_fail
+    , EXTRACT(epoch from (CURRENT_TIMESTAMP - last_archived_time)) AS seconds_since_last_archive
+    , archived_count
+    , failed_count
+    FROM pg_catalog.pg_stat_archiver 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - seconds_since_last_fail:
+        usage: "GAUGE"
+        description: "Seconds since the last recorded failure of the archive_command"
+    - seconds_since_last_archive:
+        usage: "GAUGE"
+        description: "Seconds since the last successful archive operation"
+    - archived_count:
+        usage: "GAUGE"
+        description: "Number of WAL files that have been successfully archived"
+    - failed_count:
+        usage: "GAUGE"
+        description: "Number of failed attempts for archiving WAL files"
+
+ccp_sequence_exhaustion:
+  desc: "Sequence exhaustion status"
+  query: | 
+    SELECT count FROM monitor.sequence_exhaustion(75) 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - count:
+        usage: "GAUGE"
+        description: "Count of sequences that have reached greater than or equal to 75% of their max available numbers. Function monitor.sequence_status() can provide more details if run directly on system."
+
+ccp_postmaster_uptime:
+  desc: "Database uptime"
+  query: | 
+    SELECT extract(epoch from (clock_timestamp() - pg_postmaster_start_time() )) AS seconds; 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - seconds:
+        usage: "GAUGE"
+        description: "Time interval in seconds since PostgreSQL database was last restarted"
+
+ccp_pg_settings_checksum:
+  desc: "PostgreSQL Settings Checksum"
+  query: | 
+    SELECT monitor.pg_settings_checksum() AS status; 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - status:
+        usage: "GAUGE"
+        description: "Value of checksum monitioring status for pg_catalog.pg_settings (postgresql.conf). 0 = valid config. 1 = settings changed. To reset current config to valid after alert, run monitor.pg_settings_checksum_set_valid()."
+
+ccp_settings_pending_restart:
+  desc: "PostgreSQL Pending Restart Check"
+  query: | 
+    SELECT count(*) AS count FROM pg_catalog.pg_settings WHERE pending_restart = true 
+  tags:
+    - cluster
+    - global
+  ttl: 60
+  metrics:
+    - count:
+        usage: "GAUGE"
+        description: "Number of settings from pg_settings catalog in a pending_restart state"
+
+##
+#
+# End : Global Queries
+#
+###
+
+#######################################
+#
+# Begin : Per-DB Queries
+#
+###
+
+ccp_stat_user_tables:
+  desc: "Per-table statistics"
+  query: | 
+    SELECT current_database() as dbname, schemaname, relname, seq_scan, seq_tup_read, idx_scan, idx_tup_fetch, n_tup_ins, n_tup_upd
+    , n_tup_del, n_tup_hot_upd, n_live_tup, n_dead_tup, vacuum_count, autovacuum_count, analyze_count, autoanalyze_count 
+    FROM pg_catalog.pg_stat_user_tables;
+  tags:
+    - perdb
+  ttl: 60
+  metrics:
+    - dbname:
+        usage: "LABEL"
+        description: "Database name"
+    - schemaname:
+        usage: "LABEL"
+        description: "Name of the schema that this table is in"
+    - relname:
+        usage: "LABEL"
+        description: "Name of this table"
+    - seq_scan:
+        usage: "COUNTER"
+        description: "Number of sequential scans initiated on this table"
+    - seq_tup_read:
+        usage: "COUNTER"
+        description: "Number of live rows fetched by sequential scans"
+    - idx_scan:
+        usage: "COUNTER"
+        description: "Number of index scans initiated on this table"
+    - idx_tup_fetch:
+        usage: "COUNTER"
+        description: "Number of live rows fetched by index scans"
+    - n_tup_ins:
+        usage: "COUNTER"
+        description: "Number of rows inserted"
+    - n_tup_upd:
+        usage: "COUNTER"
+        description: "Number of rows updated"
+    - n_tup_del:
+        usage: "COUNTER"
+        description: "Number of rows deleted"
+    - n_tup_hot_upd:
+        usage: "COUNTER"
+        description: "Number of rows HOT updated (i.e., with no separate index update required)"
+    - n_live_tup:
+        usage: "GAUGE"
+        description: "Estimated number of live rows"
+    - n_dead_tup:
+        usage: "GAUGE"
+        description: "Estimated number of dead rows"
+    - vacuum_count:
+        usage: "COUNTER"
+        description: "Number of times this table has been manually vacuumed (not counting VACUUM FULL)"
+    - autovacuum_count:
+        usage: "COUNTER"
+        description: "Number of times this table has been vacuumed by the autovacuum daemon"
+    - analyze_count:
+        usage: "COUNTER"
+        description: "Number of times this table has been manually analyzed"
+    - autoanalyze_count:
+        usage: "COUNTER"
+        description: "Number of times this table has been analyzed by the autovacuum daemon"
+
+ccp_table_size:
+  desc: "Table size"
+  query: | 
+    SELECT current_database() as dbname, n.nspname as schemaname, c.relname, pg_total_relation_size(c.oid) as size_bytes 
+    FROM pg_catalog.pg_class c 
+    JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid 
+    WHERE NOT pg_is_other_temp_schema(n.oid) AND relkind IN ('r', 'm', 'f'); 
+  tags:
+    - perdb
+  ttl: 60
+  metrics:
+    - dbname:
+        usage: "LABEL"
+        description: "Database name"
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - relname:
+        usage: "LABEL"
+        description: "Table name"
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Table size including indexes"
+
+##
+#
+# End : Per-DB Queries
+#
+###
+
+
+#######################################
+#
+# Begin : Version Specific Queries
+#
+###
+
+
+ccp_connection_stats:
+  desc: "PG Connection Statistics" 
+  query: | 
+    select ((total - idle) - idle_in_txn) as active
+        , total
+        , idle
+        , idle_in_txn
+        , (select coalesce(extract(epoch from (max(clock_timestamp() - state_change))),0) from pg_catalog.pg_stat_activity where state = 'idle in transaction') as max_idle_in_txn_time
+        , (select coalesce(extract(epoch from (max(clock_timestamp() - query_start))),0) from pg_catalog.pg_stat_activity where backend_type = 'client backend' and state <> 'idle' ) as max_query_time
+        , (select coalesce(extract(epoch from (max(clock_timestamp() - query_start))),0) from pg_catalog.pg_stat_activity where backend_type = 'client backend' and wait_event_type = 'Lock' ) as max_blocked_query_time
+        , max_connections
+        from (
+                select count(*) as total
+                        , coalesce(sum(case when state = 'idle' then 1 else 0 end),0) as idle
+                        , coalesce(sum(case when state = 'idle in transaction' then 1 else 0 end),0) as idle_in_txn from pg_catalog.pg_stat_activity) x
+        join (select setting::float AS max_connections FROM pg_settings WHERE name = 'max_connections') xx ON (true); 
+  tags:
+    - cluster
+  ttl: 60
+  min_version: 120000
+  max_version: 150000
+  metrics:
+    - active:
+        usage: "GAUGE"
+        description: "Total non-idle connections"
+    - total:
+        usage: "GAUGE"
+        description: "Total idle and non-idle connections"
+    - idle:
+        usage: "GAUGE"
+        description: "Total idle connections"
+    - idle_in_txn:
+        usage: "GAUGE"
+        description: "Total idle in transaction connections"
+    - max_idle_in_txn_time:
+        usage: "GAUGE"
+        description: "Length of time in seconds of the longest idle in transaction session"
+    - max_query_time:
+        usage: "GAUGE"
+        description: "Length of time in seconds of the longest running query"
+    - max_blocked_query_time:
+        usage: "GAUGE"
+        description: "Length of time in seconds of the longest running query that has been blocked by a heavyweight lock"
+    - max_connections:
+        usage: "GAUGE"
+        description: "Value of max_connections for the monitored database"
+
+ccp_replication_lag:
+  desc: "Replication Lag Time (replica only)"
+  query: | 
+    SELECT
+           CASE
+           WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0
+           ELSE EXTRACT (EPOCH FROM clock_timestamp() - pg_last_xact_replay_timestamp())::INTEGER
+           END
+        AS replay_time
+        , EXTRACT (EPOCH FROM clock_timestamp() - pg_last_xact_replay_timestamp())::INTEGER
+        AS received_time 
+  tags:
+    - cluster
+    - replica
+  ttl: 60
+  min_version: 120000
+  max_version: 150000
+  metrics:
+    - replay_time:
+        usage: "GAUGE"
+        description: "Length of time since the last transaction was replayed on replica. Returns zero if last WAL recieved equals last WAL replayed. Avoids false positives when primary stops writing. Monitors for replicas that cannot keep up with primary WAL generation."
+    - received_time:
+        usage: "GAUGE"
+        description: "Length of time since the last WAL file was received and replayed on replica. Always increases, possibly causing false positives if the primary stops writing. Monitors for replicas that stop receiving WAL all together."
+
+ccp_replication_lag_size:
+  desc: "Replication Lag Size (primary only)"
+  query: | 
+    SELECT client_addr as replica
+        , client_hostname as replica_hostname
+        , client_port as replica_port
+        , pg_wal_lsn_diff(sent_lsn, replay_lsn) as bytes
+        FROM pg_catalog.pg_stat_replication 
+  tags:
+    - cluster
+    - primary
+  ttl: 60
+  min_version: 120000
+  max_version: 150000
+  metrics:
+    - replica:
+        usage: "LABEL"
+        description: "Replica address"
+    - replica_hostname:
+        usage: "LABEL"
+        description: "Replica hostname"
+    - replica_port:
+        usage: "LABEL"
+        description: "Replica port"
+    - bytes:
+        usage: "GAUGE"
+        description: "Replication lag in bytes"
+
+ccp_replication_slots:
+  desc: "Replication Slots status"
+  query: | 
+    SELECT slot_name, active::int, pg_wal_lsn_diff(pg_current_wal_insert_lsn(), restart_lsn) AS retained_bytes FROM pg_catalog.pg_replication_slots; 
+  tags:
+    - cluster
+  ttl: 60
+  min_version: 120000
+  max_version: 150000
+  metrics:
+    - slot_name:
+        usage: "LABEL"
+        description: "Name of replication slot"
+    - active:
+        usage: "GAUGE"
+        description: "Active state of slot. 1 = true. 0 = false."
+    - retained_bytes:
+        usage: "GAUGE"
+        description: "The amount of WAL (in bytes) being retained for this slot"
+
+ccp_wal_activity:
+  desc: "WAL Activity"
+  query: | 
+    SELECT last_5_min_size_bytes,
+      (SELECT COALESCE(sum(size),0) FROM pg_catalog.pg_ls_waldir()) AS total_size_bytes
+      FROM (SELECT COALESCE(sum(size),0) AS last_5_min_size_bytes FROM pg_catalog.pg_ls_waldir() WHERE modification > CURRENT_TIMESTAMP - '5 minutes'::interval) x; 
+  tags:
+    - cluster
+  ttl: 60
+  min_version: 120000
+  max_version: 150000
+  metrics:
+    - last_5_min_size_bytes:
+        usage: "GAUGE"
+        description: "Current size in bytes of the last 5 minutes of WAL generation. Includes recycled WALs."
+    - total_size_bytes:
+        usage: "GAUGE"
+        description: "Current size in bytes of the WAL directory"
+
+ccp_data_checksum_failure:
+  desc: "PostgreSQL Database File Checksum Failure"
+  query: | 
+    SELECT datname AS dbname
+            , checksum_failures AS count
+            , coalesce(extract(epoch from (clock_timestamp() - checksum_last_failure)), 0) AS time_since_last_failure_seconds
+          FROM pg_catalog.pg_stat_database;     
+  tags:
+    - cluster
+  ttl: 60
+  min_version: 120000
+  max_version: 150000
+  metrics:
+    - dbname:
+        usage: "LABEL"
+        description: "Database name"
+    - count:
+        usage: "GAUGE"
+        description: "Total number of checksum failures on this database"
+    - time_since_last_failure_seconds:
+        usage: "GAUGE"
+        description: "Time interval in seconds since the last checksum failure was encountered"
+
+ccp_pg_hba_checksum:
+  desc: "HBA File Checksum"
+  query: | 
+    SELECT monitor.pg_hba_checksum() AS status; 
+  tags:
+    - cluster
+  ttl: 60
+  min_version: 120000
+  max_version: 150000
+  metrics:
+    - status:
+        usage: "GAUGE"
+        description: "Value of checksum monitioring status for pg_catalog.pg_hba_file_rules (pg_hba.conf). 0 = valid config. 1 = settings changed. To reset current config to valid after alert, run monitor.pg_hba_checksum_set_valid()."
+
+
+##
+#
+# End : Version Specific Queries
+#
+###
+
+
+#######################################
+#
+# Begin : pg_stat_statements Queries
+#
+###
+
+#### Minimum PG 13
+
+ccp_pg_stat_statements_total_pg13:
+  name: ccp_pg_stat_statements_total
+  desc: "pg_stat_statements total stats"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              sum(s.calls) AS calls_count,
+              sum(s.total_exec_time) AS exec_time_ms,
+              avg(s.mean_exec_time) AS mean_exec_time_ms,
+              sum(s.rows) AS row_count
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          GROUP BY 1,2 
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 130000
+  max_version: 150000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - calls_count:
+        usage: "GAUGE"
+        description: "Total number of queries run per user/database"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Total runtime of all queries per user/database"
+    - mean_exec_time_ms:
+        usage: "GAUGE"
+        description: "Mean runtime of all queries per user/database"
+    - row_count:
+        usage: "GAUGE"
+        description: "Total rows returned from all queries per user/database"
+
+ccp_pg_stat_statements_top_mean_pg13:
+  name: ccp_pg_stat_statements_top_mean
+  desc: "pg_stat_statements top mean queries"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              s.queryid,
+              btrim(replace(left(s.query, 40), '\n', '')) AS query,
+              max(s.mean_exec_time) exec_time_ms
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          GROUP BY 1,2,3,4
+          ORDER BY 5 DESC
+          LIMIT 10;
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 130000
+  max_version: 150000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - queryid:
+        usage: "LABEL"
+        description: "Internal hash code, computed from the statement's parse tree"
+    - query:
+        usage: "LABEL"
+        description: "First 40 characters of query text"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Average query runtime in milliseconds"
+
+ccp_pg_stat_statements_top_total_pg13:
+  name: ccp_pg_stat_statements_top_total
+  desc: "pg_stat_statements top total runtime queries"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              s.queryid,
+              btrim(replace(left(s.query, 40), '\n', '')) AS query,
+              s.total_exec_time exec_time_ms
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          ORDER BY 5 DESC
+          LIMIT 10;
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 130000
+  max_version: 150000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - queryid:
+        usage: "LABEL"
+        description: "Internal hash code, computed from the statement's parse tree"
+    - query:
+        usage: "LABEL"
+        description: "First 40 characters of query text"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Total time spent in the statement in milliseconds"
+
+ccp_pg_stat_statements_top_max_pg13:
+  name: ccp_pg_stat_statements_top_max
+  desc: "pg_stat_statements top longest running individual queries"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              s.queryid,
+              btrim(replace(left(s.query, 40), '\n', '')) AS query,
+              s.max_exec_time AS exec_time_ms
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          ORDER BY 5 DESC
+          LIMIT 10;
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 130000
+  max_version: 150000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - queryid:
+        usage: "LABEL"
+        description: "Internal hash code, computed from the statement's parse tree"
+    - query:
+        usage: "LABEL"
+        description: "First 40 characters of query text"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Maximum time spent in the statement in milliseconds"
+
+#### Minimum PG 10 / Max PG 12
+
+ccp_pg_stat_statements_total_pg10:
+  name: ccp_pg_stat_statements_total
+  desc: "pg_stat_statements total stats"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              sum(s.calls) AS calls_count,
+              sum(s.total_time) AS exec_time_ms,
+              avg(s.mean_time) AS mean_exec_time_ms,
+              sum(s.rows) AS row_count
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          GROUP BY 1,2;
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 100000
+  max_version: 120000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - calls_count:
+        usage: "GAUGE"
+        description: "Total number of queries run per user/database"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Total runtime of all queries per user/database"
+    - mean_exec_time_ms:
+        usage: "GAUGE"
+        description: "Mean runtime of all queries per user/database"
+    - row_count:
+        usage: "GAUGE"
+        description: "Total rows returned from all queries per user/database"
+
+ccp_pg_stat_statements_top_mean_pg10:
+  name: ccp_pg_stat_statements_top_mean
+  desc: "pg_stat_statements top mean queries"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              s.queryid,
+              btrim(replace(left(s.query, 40), '\n', '')) AS query,
+              max(s.mean_time) exec_time_ms
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          GROUP BY 1,2,3,4
+          ORDER BY 5 DESC
+          LIMIT 10;
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 100000
+  max_version: 120000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - queryid:
+        usage: "LABEL"
+        description: "Internal hash code, computed from the statement's parse tree"
+    - query:
+        usage: "LABEL"
+        description: "First 40 characters of query text"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Average query runtime in milliseconds"
+
+ccp_pg_stat_statements_top_total_pg10:
+  name: ccp_pg_stat_statements_top_total
+  desc: "pg_stat_statements top total runtime queries"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              s.queryid,
+              btrim(replace(left(s.query, 40), '\n', '')) AS query,
+              s.total_time exec_time_ms
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          ORDER BY 5 DESC
+          LIMIT 10;
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 100000
+  max_version: 120000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - queryid:
+        usage: "LABEL"
+        description: "Internal hash code, computed from the statement's parse tree"
+    - query:
+        usage: "LABEL"
+        description: "First 40 characters of query text"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Total time spent in the statement in milliseconds"
+
+ccp_pg_stat_statements_top_max_pg10:
+  name: ccp_pg_stat_statements_top_max
+  desc: "pg_stat_statements top longest running individual queries"
+  query: | 
+    SELECT pg_get_userbyid(s.userid) as role,
+              d.datname AS dbname,
+              s.queryid,
+              btrim(replace(left(s.query, 40), '\n', '')) AS query,
+              s.max_time AS exec_time_ms
+          FROM public.pg_stat_statements s
+          JOIN pg_catalog.pg_database d
+          ON d.oid = s.dbid
+          ORDER BY 5 DESC
+          LIMIT 10;
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements
+  ttl: 60
+  min_version: 100000
+  max_version: 120000
+  metrics:
+    - role:
+        usage: "LABEL"
+        description: "Role that executed the statement"
+    - dbname:
+        usage: "LABEL"
+        description: "Database in which the statement was executed"
+    - queryid:
+        usage: "LABEL"
+        description: "Internal hash code, computed from the statement's parse tree"
+    - query:
+        usage: "LABEL"
+        description: "First 40 characters of query text"
+    - exec_time_ms:
+        usage: "GAUGE"
+        description: "Maximum time spent in the statement in milliseconds"
+
+
+#### Reset stats 
+
+ccp_pg_stat_statements_reset:
+  desc: "Enabling this metric will reset pg_stat_statements every N minutes (N = argument to function)"
+  query: | 
+    select monitor.pg_stat_statements_reset_info(10) as time; 
+  tags:
+    - cluster
+    - extension:pg_stat_statements
+    - pg_stat_statements_reset
+  ttl: 60
+  min_version: 120000
+  metrics:
+    - time:
+        usage: "GAUGE"
+        description: "Epoch time when stats were reset"
+
+##
+#
+# End : pg_stat_statements Queries
+#
+###
+
+
+
+#######################################
+#
+# Begin : pgBackrest Queries
+#
+###
+
+ccp_backrest_test:
+  desc: "testing backrest"
+  query: "SELECT config_file, length(data::text) AS data FROM monitor.pgbackrest_info(0)"
+  tags:
+    - cluster
+    - pgbackrest
+  ttl: 60
+  metrics:
+    - config_file:
+        usage: "LABEL"      
+        description: "Configuration file for this backup"
+    - data:
+        usage: "GAUGE" 
+        description: "length"
+
+ccp_backrest_last_info:
+  desc: "pgBackrest info latest general info"
+  query: | 
+    WITH all_backups AS (
+                SELECT config_file
+                 , jsonb_array_elements(data) AS stanza_data
+                FROM monitor.pgbackrest_info
+            )
+            , per_stanza AS (
+                SELECT config_file
+                 , stanza_data->>'name' AS stanza
+                 , jsonb_array_elements(stanza_data->'backup') AS backup_data
+                FROM all_backups
+            )
+            SELECT a.config_file
+             , a.stanza
+             , a.backup_data->'backrest'->>'version' AS backrest_repo_version
+             , a.backup_data->'database'->>'repo-key' AS repo
+             , a.backup_data->>'type' AS backup_type
+             , a.backup_data->'info'->'repository'->>'delta' AS repo_backup_size_bytes
+             , a.backup_data->'info'->'repository'->>'size' AS repo_total_size_bytes
+             , (a.backup_data->'timestamp'->>'stop')::bigint - (a.backup_data->'timestamp'->>'start')::bigint AS backup_runtime_seconds
+             FROM per_stanza a
+             JOIN (
+                    SELECT config_file
+                        , stanza
+                        , backup_data->'database'->>'repo-key' AS repo
+                        , backup_data->>'type' AS backup_type
+                        , max(backup_data->'timestamp'->>'start') AS max_backup_start
+                        , max(backup_data->'timestamp'->>'stop') AS max_backup_stop
+                    FROM per_stanza
+                    GROUP BY 1,2,3,4) b
+            ON a.config_file = b.config_file
+            AND a.stanza = b.stanza
+            AND a.backup_data->>'type' = b.backup_type
+            AND a.backup_data->'timestamp'->>'start' = b.max_backup_start
+            AND a.backup_data->'timestamp'->>'stop' = b.max_backup_stop; 
+  tags:
+    - cluster
+    - pgbackrest
+  ttl: 600
+  metrics:
+    - config_file:
+        usage: "LABEL"
+        description: "Configuration file for this backup"
+    - stanza:
+        usage: "LABEL"
+        description: "pgBackRest stanza name"
+    - repo:
+        usage: "LABEL"
+        description: "pgBackRest repository number"
+    - backup_type:
+        usage: "LABEL"
+        description: "Backup type"
+    - backrest_repo_version:
+        usage: "GAUGE"
+        description: "pgBackRest version number when this backup was performed"
+    - repo_backup_size_bytes:
+        usage: "GAUGE"
+        description: "Actual size of only this individual backup in the pgbackrest repository"
+    - repo_total_size_bytes:
+        usage: "GAUGE"
+        description: "Total size of this backup in the pgbackrest repository, including all required previous backups and WAL"
+    - backup_runtime_seconds:
+        usage: "GAUGE"
+        description: "Total runtime in seconds of this backup"
+
+ccp_backrest_oldest_full_backup:
+  desc: "pgBackRest oldest full backup" 
+  query: | 
+    WITH all_backups AS (
+        SELECT config_file
+         , jsonb_array_elements(data) AS stanza_data
+        FROM monitor.pgbackrest_info(0)
+    )
+    , per_stanza AS (
+        SELECT config_file
+         , stanza_data->>'name' AS stanza
+         , jsonb_array_elements(stanza_data->'backup') AS backup_data
+        FROM all_backups
+    )
+    SELECT config_file
+      , stanza
+      , backup_data->'database'->>'repo-key' AS repo
+      , min((backup_data->'timestamp'->>'stop')::bigint) time_seconds
+    FROM per_stanza 
+    WHERE backup_data->>'type' IN ('full')
+    GROUP BY config_file, stanza, backup_data->'database'->>'repo-key' 
+  tags:
+    - cluster
+    - pgbackrest
+  ttl: 600
+  metrics:
+    - config_file:
+        usage: "LABEL"
+        description: "Configuration file for this backup"
+    - stanza: 
+        usage: "LABEL"
+        description: "pgBackRest stanza name"
+    - repo:
+        usage: "LABEL"
+        description: "pgBackRest repository number"
+    - time_seconds:
+        usage: "GAUGE"
+        description: "Seconds since the oldest completed full backup"
+
+ccp_backrest_last_full_backup:
+  desc: "pgBackRest last full backup" 
+  query: | 
+    WITH all_backups AS (
+        SELECT config_file
+         , jsonb_array_elements(data) AS stanza_data
+        FROM monitor.pgbackrest_info(0)
+    )
+    , per_stanza AS ( 
+        SELECT config_file
+         , stanza_data->>'name' AS stanza
+         , jsonb_array_elements(stanza_data->'backup') AS backup_data
+        FROM all_backups
+    )
+    SELECT config_file
+     , stanza
+     , backup_data->'database'->>'repo-key' AS repo
+     , extract(epoch from (CURRENT_TIMESTAMP - max(to_timestamp((backup_data->'timestamp'->>'stop')::bigint)))) AS time_since_completion_seconds
+    FROM per_stanza
+    WHERE backup_data->>'type' IN ('full')
+    GROUP BY config_file, stanza, backup_data->'database'->>'repo-key' 
+  tags:
+    - cluster
+    - pgbackrest
+  ttl: 600
+  metrics:
+    - config_file:
+        usage: "LABEL"
+        description: "Configuration file for this backup"
+    - stanza: 
+        usage: "LABEL"
+        description: "pgBackRest stanza name"
+    - repo:
+        usage: "LABEL"
+        description: "pgBackRest repository number"
+    - time_since_completion_seconds:
+        usage: "GAUGE"
+        description: "Seconds since the last completed full backup"
+
+
+ccp_backrest_last_diff_backup:
+  desc: "pgBackRest last differential backup" 
+  query: | 
+    WITH all_backups AS (
+        SELECT config_file
+         , jsonb_array_elements(data) AS stanza_data
+     FROM monitor.pgbackrest_info(0)
+    )
+    , per_stanza AS ( 
+        SELECT config_file
+         , stanza_data->>'name' AS stanza
+         , jsonb_array_elements(stanza_data->'backup') AS backup_data
+        FROM all_backups
+    )
+    SELECT config_file
+     , stanza
+     , backup_data->'database'->>'repo-key' AS repo
+     , extract(epoch from (CURRENT_TIMESTAMP - max(to_timestamp((backup_data->'timestamp'->>'stop')::bigint)))) AS time_since_completion_seconds
+    FROM per_stanza
+    WHERE backup_data->>'type' IN ('full', 'diff')
+    GROUP BY config_file, stanza, backup_data->'database'->>'repo-key' 
+  tags:
+    - cluster
+    - pgbackrest
+  ttl: 600
+  metrics:
+    - config_file:
+        usage: "LABEL"
+        description: "Configuration file for this backup"
+    - stanza: 
+        usage: "LABEL"
+        description: "pgBackRest stanza name"
+    - repo:
+        usage: "LABEL" description: "pgBackRest repository number"
+    - time_since_completion_seconds:
+        usage: "GAUGE"
+        description: "Seconds since the last completed full or differential backup. Differential is always based off last full."
+
+ccp_backrest_last_incr_backup:
+  desc: "pgBackRest last incremental backup" 
+  query: | 
+    WITH all_backups AS (
+        SELECT config_file
+         , jsonb_array_elements(data) AS stanza_data
+        FROM monitor.pgbackrest_info(0)
+    , per_stanza AS ( 
+        SELECT config_file
+         , stanza_data->>'name' AS stanza
+         , jsonb_array_elements(stanza_data->'backup') AS backup_data
+        FROM all_backups
+    )
+    SELECT config_file
+     , stanza
+     , backup_data->'database'->>'repo-key' AS repo
+     , extract(epoch from (CURRENT_TIMESTAMP - max(to_timestamp((backup_data->'timestamp'->>'stop')::bigint)))) AS time_since_completion_seconds
+    FROM per_stanza
+    WHERE backup_data->>'type' IN ('full', 'diff', 'incr')
+    GROUP BY config_file, stanza, backup_data->'database'->>'repo-key' 
+  tags:
+    - cluster
+    - pgbackrest
+  ttl: 600
+  metrics:
+    - config_file:
+        usage: "LABEL"
+        description: "Configuration file for this backup"
+    - stanza: 
+        usage: "LABEL"
+        description: "pgBackRest stanza name"
+    - repo:
+        usage: "LABEL"
+        description: "pgBackRest repository number"
+    - time_since_completion_seconds:
+        usage: "GAUGE"
+        description: "Seconds since the last completed full, differential or incremental backup. Incremental is always based off last full or differential."
+
+#######################################
+#
+# End : pgBackrest Queries
+#
+###
+
